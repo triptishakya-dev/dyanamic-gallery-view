@@ -857,12 +857,9 @@ class DetailViewer(QWidget):
             self.update_image()
         super().resizeEvent(event)
         
-        # Position close button (cut sign) in the top right corner
+        # Position close button (cut sign) in the top left corner
         margin = 15
-        self.close_button.move(
-            self.width() - self.close_button.width() - margin,
-            margin
-        )
+        self.close_button.move(margin, margin)
         self.close_button.raise_()
 
 
