@@ -4,15 +4,20 @@ from datetime import datetime
 from PyQt5.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QScrollArea, QSplitter, QGraphicsOpacityEffect,
-    QFrame, QMainWindow
+    QFrame, QMainWindow, QStackedWidget, QPushButton, QSlider
 )
 from PyQt5.QtGui import (
-    QPixmap, QColor, QPainter, QBrush, QPen, QKeyEvent, QPainterPath
+    QPixmap, QColor, QPainter, QBrush, QPen, QKeyEvent, QPainterPath,
+    QLinearGradient, QPolygon, QImage
 )
 from PyQt5.QtCore import (
     Qt, QThread, pyqtSignal, pyqtProperty, QPropertyAnimation, 
-    QEasingCurve, QRect
+    QEasingCurve, QRect, QPoint, QUrl
 )
+from PyQt5.QtMultimedia import QMediaPlayer, QMediaContent
+from PyQt5.QtMultimediaWidgets import QVideoWidget
+import fitz
+
 
 # Dark theme colors
 BG_COLOR = QColor("#121212")
@@ -23,6 +28,11 @@ TEXT_COLOR = "#e0e0e0"
 SCROLLBAR_BG = "#1e1e1e"
 SCROLLBAR_HANDLE = "#555555"
 
+IMAGE_EXTS = ('.png', '.jpg', '.jpeg', '.webp', '.bmp', '.avif', '.svg')
+VIDEO_EXTS = ('.mp4', '.avi', '.mkv', '.mov', '.webm')
+PDF_EXTS = ('.pdf',)
+ALL_EXTS = IMAGE_EXTS + VIDEO_EXTS + PDF_EXTS
+
 class ImageWorker(QThread):
     thumbnail_ready = pyqtSignal(str, str, str, QPixmap)
     finished_loading = pyqtSignal()
@@ -32,10 +42,57 @@ class ImageWorker(QThread):
         self.folder_path = folder_path
         self.running = True
 
+    def create_rounded_thumbnail(self, pixmap):
+        size = min(pixmap.width(), pixmap.height())
+        rect = QRect((pixmap.width() - size) // 2, (pixmap.height() - size) // 2, size, size)
+        cropped = pixmap.copy(rect)
+        thumb = cropped.scaled(80, 80, Qt.AspectRatioMode.KeepAspectRatioByExpanding, Qt.TransformationMode.SmoothTransformation)
+        
+        rounded = QPixmap(80, 80)
+        rounded.fill(Qt.GlobalColor.transparent)
+        painter = QPainter(rounded)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        path = QPainterPath()
+        path.addRoundedRect(0, 0, 80, 80, 8, 8)
+        painter.setClipPath(path)
+        painter.drawPixmap(0, 0, thumb)
+        painter.end()
+        return rounded
+
+    def create_video_placeholder(self):
+        rounded = QPixmap(80, 80)
+        rounded.fill(Qt.GlobalColor.transparent)
+        painter = QPainter(rounded)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        
+        # Round clip path
+        path = QPainterPath()
+        path.addRoundedRect(0, 0, 80, 80, 8, 8)
+        painter.setClipPath(path)
+        
+        # Draw background gradient (dark charcoal/blue)
+        grad = QLinearGradient(0, 0, 80, 80)
+        grad.setColorAt(0, QColor("#1e293b"))
+        grad.setColorAt(1, QColor("#0f172a"))
+        painter.fillRect(0, 0, 80, 80, QBrush(grad))
+        
+        # Draw play icon in center
+        painter.setBrush(QBrush(QColor("#38bdf8"))) # Light blue color
+        painter.setPen(Qt.PenStyle.NoPen)
+        
+        poly = QPolygon([
+            QPoint(32, 28),
+            QPoint(32, 52),
+            QPoint(54, 40)
+        ])
+        painter.drawPolygon(poly)
+        painter.end()
+        return rounded
+
     def run(self):
         try:
             files = [f for f in os.listdir(self.folder_path) 
-                     if f.lower().endswith(('.png', '.jpg', '.jpeg', '.webp', '.bmp', '.avif', '.svg'))]
+                     if f.lower().endswith(ALL_EXTS)]
         except Exception:
             files = []
         
@@ -50,23 +107,30 @@ class ImageWorker(QThread):
                 dt = datetime.fromtimestamp(stat.st_ctime)
                 date_str = dt.strftime("%Y-%m-%d %H:%M")
                 
-                pixmap = QPixmap(filepath)
-                if not pixmap.isNull():
-                    size = min(pixmap.width(), pixmap.height())
-                    rect = QRect((pixmap.width() - size) // 2, (pixmap.height() - size) // 2, size, size)
-                    cropped = pixmap.copy(rect)
-                    thumb = cropped.scaled(80, 80, Qt.AspectRatioMode.KeepAspectRatioByExpanding, Qt.TransformationMode.SmoothTransformation)
-                    
-                    rounded = QPixmap(80, 80)
-                    rounded.fill(Qt.GlobalColor.transparent)
-                    painter = QPainter(rounded)
-                    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-                    path = QPainterPath()
-                    path.addRoundedRect(0, 0, 80, 80, 8, 8)
-                    painter.setClipPath(path)
-                    painter.drawPixmap(0, 0, thumb)
-                    painter.end()
-                    
+                lower_name = filename.lower()
+                rounded = None
+                
+                if lower_name.endswith(IMAGE_EXTS):
+                    pixmap = QPixmap(filepath)
+                    if not pixmap.isNull():
+                        rounded = self.create_rounded_thumbnail(pixmap)
+                elif lower_name.endswith(PDF_EXTS):
+                    try:
+                        doc = fitz.open(filepath)
+                        if len(doc) > 0:
+                            page = doc.load_page(0)
+                            # Render at a small size for thumbnail
+                            pix = page.get_pixmap(matrix=fitz.Matrix(0.2, 0.2))
+                            fmt = QImage.Format.Format_RGBA8888 if pix.alpha else QImage.Format.Format_RGB888
+                            qimg = QImage(pix.samples, pix.width, pix.height, pix.stride, fmt)
+                            pixmap = QPixmap.fromImage(qimg)
+                            rounded = self.create_rounded_thumbnail(pixmap)
+                    except Exception as e:
+                        print(f"Error making PDF thumbnail: {e}")
+                elif lower_name.endswith(VIDEO_EXTS):
+                    rounded = self.create_video_placeholder()
+                
+                if rounded:
                     self.thumbnail_ready.emit(filepath, filename, date_str, rounded)
             except Exception as e:
                 print(f"Error loading {filepath}: {e}")
@@ -76,6 +140,7 @@ class ImageWorker(QThread):
     def stop(self):
         self.running = False
         self.wait()
+
 
 class ImageCard(QWidget):
     clicked = pyqtSignal(str, object)  # filepath, self
@@ -176,13 +241,257 @@ class DetailViewer(QWidget):
         self.layout = QVBoxLayout(self)
         self.layout.setContentsMargins(0, 0, 0, 0)
         
+        self.stacked_widget = QStackedWidget()
+        self.layout.addWidget(self.stacked_widget)
+        
+        # 1. Image View Setup
+        self.image_container = QWidget()
+        image_layout = QVBoxLayout(self.image_container)
+        image_layout.setContentsMargins(0, 0, 0, 0)
         self.image_label = QLabel()
         self.image_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.image_label.setStyleSheet("background-color: #121212;")
-        self.layout.addWidget(self.image_label)
+        image_layout.addWidget(self.image_label)
+        self.stacked_widget.addWidget(self.image_container)
         
-        self.opacity_effect = QGraphicsOpacityEffect(self.image_label)
-        self.image_label.setGraphicsEffect(self.opacity_effect)
+        # 2. Video View Setup
+        self.video_container = QWidget()
+        self.video_container.setStyleSheet("background-color: #121212;")
+        video_layout = QVBoxLayout(self.video_container)
+        video_layout.setContentsMargins(0, 0, 0, 0)
+        
+        self.video_widget = QVideoWidget()
+        self.video_widget.setStyleSheet("background-color: #000;")
+        video_layout.addWidget(self.video_widget)
+        
+        self.video_controls = QWidget()
+        self.video_controls.setFixedHeight(50)
+        self.video_controls.setStyleSheet("background-color: #1e1e1e; border-top: 1px solid #333;")
+        controls_layout = QHBoxLayout(self.video_controls)
+        controls_layout.setContentsMargins(15, 5, 15, 5)
+        controls_layout.setSpacing(10)
+        
+        self.play_button = QPushButton("▶")
+        self.play_button.setFixedSize(40, 30)
+        self.play_button.setStyleSheet("""
+            QPushButton {
+                background-color: #2b2b2b;
+                color: #e0e0e0;
+                border: 1px solid #444;
+                border-radius: 4px;
+                font-size: 16px;
+            }
+            QPushButton:hover {
+                background-color: #3a3a3a;
+                border-color: #555;
+            }
+            QPushButton:pressed {
+                background-color: #1e1e1e;
+            }
+        """)
+        self.play_button.clicked.connect(self.toggle_play)
+        controls_layout.addWidget(self.play_button)
+        
+        self.video_slider = QSlider(Qt.Orientation.Horizontal)
+        self.video_slider.setRange(0, 0)
+        self.video_slider.setStyleSheet("""
+            QSlider::groove:horizontal {
+                border: 1px solid #262626;
+                height: 6px;
+                background: #333;
+                border-radius: 3px;
+            }
+            QSlider::sub-page:horizontal {
+                background: #38bdf8;
+                border-radius: 3px;
+            }
+            QSlider::handle:horizontal {
+                background: #e0e0e0;
+                width: 14px;
+                margin-top: -4px;
+                margin-bottom: -4px;
+                border-radius: 7px;
+            }
+            QSlider::handle:horizontal:hover {
+                background: #ffffff;
+            }
+        """)
+        self.video_slider.sliderMoved.connect(self.set_video_position)
+        controls_layout.addWidget(self.video_slider)
+        
+        self.time_label = QLabel("00:00 / 00:00")
+        self.time_label.setStyleSheet("color: #a0a0a0; font-size: 12px; font-family: monospace;")
+        controls_layout.addWidget(self.time_label)
+        
+        self.mute_button = QPushButton("🔊")
+        self.mute_button.setFixedSize(40, 30)
+        self.mute_button.setStyleSheet("""
+            QPushButton {
+                background-color: #2b2b2b;
+                color: #e0e0e0;
+                border: 1px solid #444;
+                border-radius: 4px;
+                font-size: 14px;
+            }
+            QPushButton:hover {
+                background-color: #3a3a3a;
+            }
+        """)
+        self.mute_button.clicked.connect(self.toggle_mute)
+        controls_layout.addWidget(self.mute_button)
+        
+        self.volume_slider = QSlider(Qt.Orientation.Horizontal)
+        self.volume_slider.setRange(0, 100)
+        self.volume_slider.setValue(70)
+        self.volume_slider.setFixedWidth(80)
+        self.volume_slider.setStyleSheet("""
+            QSlider::groove:horizontal {
+                height: 4px;
+                background: #333;
+            }
+            QSlider::sub-page:horizontal {
+                background: #e0e0e0;
+            }
+            QSlider::handle:horizontal {
+                background: #fff;
+                width: 10px;
+                margin-top: -3px;
+                margin-bottom: -3px;
+                border-radius: 5px;
+            }
+        """)
+        self.volume_slider.valueChanged.connect(self.set_volume)
+        controls_layout.addWidget(self.volume_slider)
+        
+        video_layout.addWidget(self.video_controls)
+        self.stacked_widget.addWidget(self.video_container)
+        
+        # Initialize media player
+        self.media_player = QMediaPlayer(None, QMediaPlayer.VideoSurface)
+        self.media_player.setVideoOutput(self.video_widget)
+        self.media_player.positionChanged.connect(self.video_position_changed)
+        self.media_player.durationChanged.connect(self.video_duration_changed)
+        self.media_player.stateChanged.connect(self.video_state_changed)
+        
+        # 3. PDF View Setup
+        self.pdf_container = QWidget()
+        self.pdf_container.setStyleSheet("background-color: #121212;")
+        pdf_layout = QVBoxLayout(self.pdf_container)
+        pdf_layout.setContentsMargins(0, 0, 0, 0)
+        pdf_layout.setSpacing(0)
+        
+        self.pdf_controls = QWidget()
+        self.pdf_controls.setFixedHeight(50)
+        self.pdf_controls.setStyleSheet("background-color: #1e1e1e; border-bottom: 1px solid #333;")
+        pdf_ctrl_layout = QHBoxLayout(self.pdf_controls)
+        pdf_ctrl_layout.setContentsMargins(15, 5, 15, 5)
+        pdf_ctrl_layout.setSpacing(10)
+        
+        self.pdf_prev_btn = QPushButton("◀ Prev")
+        self.pdf_prev_btn.setFixedSize(70, 30)
+        self.pdf_prev_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #2b2b2b;
+                color: #e0e0e0;
+                border: 1px solid #444;
+                border-radius: 4px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #3a3a3a;
+            }
+            QPushButton:disabled {
+                background-color: #181818;
+                color: #555;
+                border-color: #2b2b2b;
+            }
+        """)
+        self.pdf_prev_btn.clicked.connect(self.pdf_prev_page)
+        pdf_ctrl_layout.addWidget(self.pdf_prev_btn)
+        
+        self.pdf_page_label = QLabel("Page 0 of 0")
+        self.pdf_page_label.setStyleSheet("color: #e0e0e0; font-size: 14px; font-weight: bold;")
+        pdf_ctrl_layout.addWidget(self.pdf_page_label)
+        
+        self.pdf_next_btn = QPushButton("Next ▶")
+        self.pdf_next_btn.setFixedSize(70, 30)
+        self.pdf_next_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #2b2b2b;
+                color: #e0e0e0;
+                border: 1px solid #444;
+                border-radius: 4px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #3a3a3a;
+            }
+            QPushButton:disabled {
+                background-color: #181818;
+                color: #555;
+                border-color: #2b2b2b;
+            }
+        """)
+        self.pdf_next_btn.clicked.connect(self.pdf_next_page)
+        pdf_ctrl_layout.addWidget(self.pdf_next_btn)
+        
+        pdf_ctrl_layout.addStretch()
+        
+        self.pdf_zoom_out_btn = QPushButton("🔍-")
+        self.pdf_zoom_out_btn.setFixedSize(40, 30)
+        self.pdf_zoom_out_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #2b2b2b;
+                color: #e0e0e0;
+                border: 1px solid #444;
+                border-radius: 4px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #3a3a3a;
+            }
+        """)
+        self.pdf_zoom_out_btn.clicked.connect(self.pdf_zoom_out)
+        pdf_ctrl_layout.addWidget(self.pdf_zoom_out_btn)
+        
+        self.pdf_zoom_label = QLabel("100%")
+        self.pdf_zoom_label.setStyleSheet("color: #a0a0a0; font-size: 13px; min-width: 40px; qproperty-alignment: AlignCenter;")
+        pdf_ctrl_layout.addWidget(self.pdf_zoom_label)
+        
+        self.pdf_zoom_in_btn = QPushButton("🔍+")
+        self.pdf_zoom_in_btn.setFixedSize(40, 30)
+        self.pdf_zoom_in_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #2b2b2b;
+                color: #e0e0e0;
+                border: 1px solid #444;
+                border-radius: 4px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #3a3a3a;
+            }
+        """)
+        self.pdf_zoom_in_btn.clicked.connect(self.pdf_zoom_in)
+        pdf_ctrl_layout.addWidget(self.pdf_zoom_in_btn)
+        
+        pdf_layout.addWidget(self.pdf_controls)
+        
+        self.pdf_scroll = QScrollArea()
+        self.pdf_scroll.setWidgetResizable(True)
+        self.pdf_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self.pdf_scroll.setStyleSheet("background-color: #121212;")
+        
+        self.pdf_label = QLabel()
+        self.pdf_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.pdf_label.setStyleSheet("background-color: #121212; padding: 10px;")
+        self.pdf_scroll.setWidget(self.pdf_label)
+        
+        pdf_layout.addWidget(self.pdf_scroll)
+        self.stacked_widget.addWidget(self.pdf_container)
+        
+        self.opacity_effect = QGraphicsOpacityEffect(self.stacked_widget)
+        self.stacked_widget.setGraphicsEffect(self.opacity_effect)
         
         self.anim = QPropertyAnimation(self.opacity_effect, b"opacity")
         self.anim.setDuration(300)
@@ -190,14 +499,52 @@ class DetailViewer(QWidget):
         self.anim.setEndValue(1.0)
         self.anim.setEasingCurve(QEasingCurve.Type.InOutQuad)
         
+        self.current_filepath = None
         self.current_pixmap = None
+        self.current_pdf_doc = None
+        self.current_pdf_page = 0
+        self.pdf_zoom = 1.2
+        self.is_muted = False
+        self.last_volume = 70
 
-    def load_image(self, filepath):
+    def load_media(self, filepath):
         self.anim.stop()
-        pixmap = QPixmap(filepath)
-        self.current_pixmap = pixmap
-        self.update_image()
+        self.media_player.stop()
         
+        if self.current_pdf_doc:
+            self.current_pdf_doc.close()
+            self.current_pdf_doc = None
+            
+        self.current_filepath = filepath
+        self.current_pixmap = None
+        
+        lower_path = filepath.lower()
+        
+        if lower_path.endswith(('.png', '.jpg', '.jpeg', '.webp', '.bmp', '.avif', '.svg')):
+            self.stacked_widget.setCurrentIndex(0)
+            pixmap = QPixmap(filepath)
+            self.current_pixmap = pixmap
+            self.update_image()
+        elif lower_path.endswith(('.pdf',)):
+            self.stacked_widget.setCurrentIndex(2)
+            try:
+                self.current_pdf_doc = fitz.open(filepath)
+                self.current_pdf_page = 0
+                self.pdf_zoom = 1.2
+                self.update_pdf_page()
+            except Exception as e:
+                print(f"Error opening PDF: {e}")
+                self.pdf_label.setText(f"Failed to load PDF: {e}")
+        elif lower_path.endswith(('.mp4', '.avi', '.mkv', '.mov', '.webm')):
+            self.stacked_widget.setCurrentIndex(1)
+            self.play_button.setText("▶")
+            self.time_label.setText("00:00 / 00:00")
+            self.video_slider.setValue(0)
+            
+            media_content = QMediaContent(QUrl.fromLocalFile(filepath))
+            self.media_player.setMedia(media_content)
+            self.media_player.play()
+            
         self.anim.setStartValue(0.0)
         self.anim.setEndValue(1.0)
         self.anim.start()
@@ -211,8 +558,121 @@ class DetailViewer(QWidget):
             )
             self.image_label.setPixmap(scaled_pixmap)
 
+    def update_pdf_page(self):
+        if not self.current_pdf_doc:
+            return
+            
+        num_pages = len(self.current_pdf_doc)
+        if num_pages == 0:
+            self.pdf_page_label.setText("No pages")
+            self.pdf_prev_btn.setEnabled(False)
+            self.pdf_next_btn.setEnabled(False)
+            return
+            
+        if self.current_pdf_page < 0:
+            self.current_pdf_page = 0
+        elif self.current_pdf_page >= num_pages:
+            self.current_pdf_page = num_pages - 1
+            
+        self.pdf_page_label.setText(f"Page {self.current_pdf_page + 1} of {num_pages}")
+        self.pdf_zoom_label.setText(f"{int(self.pdf_zoom * 100)}%")
+        
+        self.pdf_prev_btn.setEnabled(self.current_pdf_page > 0)
+        self.pdf_next_btn.setEnabled(self.current_pdf_page < num_pages - 1)
+        
+        try:
+            page = self.current_pdf_doc.load_page(self.current_pdf_page)
+            mat = fitz.Matrix(self.pdf_zoom, self.pdf_zoom)
+            pix = page.get_pixmap(matrix=mat)
+            
+            fmt = QImage.Format.Format_RGBA8888 if pix.alpha else QImage.Format.Format_RGB888
+            qimg = QImage(pix.samples, pix.width, pix.height, pix.stride, fmt)
+            pixmap = QPixmap.fromImage(qimg)
+            self.pdf_label.setPixmap(pixmap)
+        except Exception as e:
+            print(f"Error rendering PDF page: {e}")
+            self.pdf_label.setText(f"Error rendering page: {e}")
+
+    def pdf_prev_page(self):
+        if self.current_pdf_doc and self.current_pdf_page > 0:
+            self.current_pdf_page -= 1
+            self.update_pdf_page()
+            
+    def pdf_next_page(self):
+        if self.current_pdf_doc and self.current_pdf_page < len(self.current_pdf_doc) - 1:
+            self.current_pdf_page += 1
+            self.update_pdf_page()
+            
+    def pdf_zoom_in(self):
+        if self.current_pdf_doc and self.pdf_zoom < 4.0:
+            self.pdf_zoom += 0.2
+            self.update_pdf_page()
+            
+    def pdf_zoom_out(self):
+        if self.current_pdf_doc and self.pdf_zoom > 0.4:
+            self.pdf_zoom -= 0.2
+            self.update_pdf_page()
+
+    def toggle_play(self):
+        if self.media_player.state() == QMediaPlayer.PlayingState:
+            self.media_player.pause()
+        else:
+            self.media_player.play()
+            
+    def toggle_mute(self):
+        if self.is_muted:
+            self.media_player.setMuted(False)
+            self.mute_button.setText("🔊")
+            self.volume_slider.setValue(self.last_volume)
+            self.is_muted = False
+        else:
+            self.last_volume = self.volume_slider.value()
+            self.media_player.setMuted(True)
+            self.mute_button.setText("🔇")
+            self.volume_slider.setValue(0)
+            self.is_muted = True
+            
+    def set_volume(self, value):
+        self.media_player.setVolume(value)
+        if value > 0:
+            self.mute_button.setText("🔊")
+            self.is_muted = False
+        else:
+            self.mute_button.setText("🔇")
+            self.is_muted = True
+            
+    def set_video_position(self, position):
+        self.media_player.setPosition(position)
+        
+    def video_position_changed(self, position):
+        if not self.video_slider.isSliderDown():
+            self.video_slider.setValue(position)
+        self.update_time_label(position, self.media_player.duration())
+        
+    def video_duration_changed(self, duration):
+        self.video_slider.setRange(0, duration)
+        self.update_time_label(self.media_player.position(), duration)
+        
+    def video_state_changed(self, state):
+        if state == QMediaPlayer.PlayingState:
+            self.play_button.setText("❚❚")
+        else:
+            self.play_button.setText("▶")
+            
+    def update_time_label(self, position, duration):
+        pos_sec = position // 1000
+        pos_min = pos_sec // 60
+        pos_sec = pos_sec % 60
+        
+        dur_sec = duration // 1000
+        dur_min = dur_sec // 60
+        dur_sec = dur_sec % 60
+        
+        self.time_label.setText(f"{pos_min:02d}:{pos_sec:02d} / {dur_min:02d}:{dur_sec:02d}")
+
     def resizeEvent(self, event):
-        self.update_image()
+        if self.stacked_widget.currentIndex() == 0:
+            self.update_image()
         super().resizeEvent(event)
 
 
@@ -313,7 +773,7 @@ class MainWindow(QMainWindow):
         selected_card.set_selected(True)
         
         self.scroll_area.ensureWidgetVisible(selected_card)
-        self.detail_viewer.load_image(selected_card.filepath)
+        self.detail_viewer.load_media(selected_card.filepath)
 
     def keyPressEvent(self, event: QKeyEvent):
         if event.key() == Qt.Key.Key_Up:
@@ -328,6 +788,9 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event):
         if self.worker.isRunning():
             self.worker.stop()
+        self.detail_viewer.media_player.stop()
+        if self.detail_viewer.current_pdf_doc:
+            self.detail_viewer.current_pdf_doc.close()
         super().closeEvent(event)
 
 if __name__ == '__main__':
