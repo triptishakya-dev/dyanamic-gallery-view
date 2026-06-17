@@ -4,7 +4,8 @@ from datetime import datetime
 from PyQt5.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QScrollArea, QSplitter, QGraphicsOpacityEffect,
-    QFrame, QMainWindow, QStackedWidget, QPushButton, QSlider
+    QFrame, QMainWindow, QStackedWidget, QPushButton, QSlider,
+    QPinchGesture
 )
 from PyQt5.QtGui import (
     QPixmap, QColor, QPainter, QBrush, QPen, QKeyEvent, QPainterPath,
@@ -12,7 +13,7 @@ from PyQt5.QtGui import (
 )
 from PyQt5.QtCore import (
     Qt, QThread, pyqtSignal, pyqtProperty, QPropertyAnimation, 
-    QEasingCurve, QRect, QPoint, QUrl
+    QEasingCurve, QRect, QPoint, QUrl, QEvent
 )
 from PyQt5.QtMultimedia import QMediaPlayer, QMediaContent
 from PyQt5.QtMultimediaWidgets import QVideoWidget
@@ -235,6 +236,119 @@ class ImageCard(QWidget):
             self.bgColor = CARD_BG
 
 
+class ZoomableImageScrollArea(QScrollArea):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWidgetResizable(True)
+        self.setFrameShape(QFrame.Shape.NoFrame)
+        self.setStyleSheet("background-color: #121212;")
+        
+        self.image_label = QLabel()
+        self.image_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.image_label.setStyleSheet("background-color: #121212;")
+        self.setWidget(self.image_label)
+        
+        # Grab pinch gesture for touchscreen zoom support
+        self.grabGesture(Qt.PinchGesture)
+        
+        self.original_pixmap = None
+        self.zoom_factor = 1.0
+        self.is_fit = True
+        self.gesture_start_zoom = 1.0
+        
+    def set_pixmap(self, pixmap):
+        self.original_pixmap = pixmap
+        self.zoom_factor = 1.0
+        self.is_fit = True
+        self.setWidgetResizable(True)
+        self.update_view()
+        
+    def update_view(self):
+        if not self.original_pixmap or self.original_pixmap.isNull():
+            return
+            
+        if self.is_fit:
+            self.setWidgetResizable(True)
+            viewport_size = self.viewport().size()
+            scaled = self.original_pixmap.scaled(
+                viewport_size,
+                Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation
+            )
+            self.image_label.setPixmap(scaled)
+        else:
+            self.setWidgetResizable(False)
+            w = int(self.original_pixmap.width() * self.zoom_factor)
+            h = int(self.original_pixmap.height() * self.zoom_factor)
+            scaled = self.original_pixmap.scaled(
+                w, h,
+                Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation
+            )
+            self.image_label.resize(w, h)
+            self.image_label.setPixmap(scaled)
+            
+    def event(self, event):
+        if event.type() == QEvent.Gesture:
+            return self.gestureEvent(event)
+        return super().event(event)
+        
+    def gestureEvent(self, event):
+        pinch = event.gesture(Qt.PinchGesture)
+        if pinch:
+            self.pinchTriggered(pinch)
+            event.accept(Qt.PinchGesture)
+            return True
+        return False
+        
+    def pinchTriggered(self, gesture):
+        if gesture.state() == Qt.GestureStarted:
+            if self.is_fit:
+                if self.image_label.pixmap():
+                    self.zoom_factor = self.image_label.pixmap().width() / self.original_pixmap.width()
+                else:
+                    self.zoom_factor = 1.0
+                self.is_fit = False
+            self.gesture_start_zoom = self.zoom_factor
+                
+        factor = gesture.scaleFactor()
+        self.zoom_factor = max(0.1, min(self.gesture_start_zoom * factor, 5.0))
+        self.update_view()
+
+    def wheelEvent(self, event):
+        # Allow trackpad/mouse pinch gesture emulation via Ctrl + Scroll Wheel
+        if event.modifiers() == Qt.KeyboardModifier.ControlModifier:
+            if self.is_fit:
+                if self.image_label.pixmap():
+                    self.zoom_factor = self.image_label.pixmap().width() / self.original_pixmap.width()
+                else:
+                    self.zoom_factor = 1.0
+                self.is_fit = False
+                
+            angle = event.angleDelta().y()
+            factor = 1.1 if angle > 0 else 0.9
+            self.zoom_factor = max(0.1, min(self.zoom_factor * factor, 5.0))
+            self.update_view()
+            event.accept()
+        else:
+            super().wheelEvent(event)
+
+    def mouseDoubleClickEvent(self, event):
+        # Double click to reset / toggle fit mode
+        self.is_fit = not self.is_fit
+        if self.is_fit:
+            self.zoom_factor = 1.0
+        else:
+            self.zoom_factor = 1.0
+        self.update_view()
+        event.accept()
+
+    def resizeEvent(self, event):
+        if self.is_fit:
+            self.update_view()
+        super().resizeEvent(event)
+
+
 class DetailViewer(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -245,14 +359,8 @@ class DetailViewer(QWidget):
         self.layout.addWidget(self.stacked_widget)
         
         # 1. Image View Setup
-        self.image_container = QWidget()
-        image_layout = QVBoxLayout(self.image_container)
-        image_layout.setContentsMargins(0, 0, 0, 0)
-        self.image_label = QLabel()
-        self.image_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.image_label.setStyleSheet("background-color: #121212;")
-        image_layout.addWidget(self.image_label)
-        self.stacked_widget.addWidget(self.image_container)
+        self.image_scroll = ZoomableImageScrollArea()
+        self.stacked_widget.addWidget(self.image_scroll)
         
         # 2. Video View Setup
         self.video_container = QWidget()
@@ -524,7 +632,7 @@ class DetailViewer(QWidget):
             self.stacked_widget.setCurrentIndex(0)
             pixmap = QPixmap(filepath)
             self.current_pixmap = pixmap
-            self.update_image()
+            self.image_scroll.set_pixmap(pixmap)
         elif lower_path.endswith(('.pdf',)):
             self.stacked_widget.setCurrentIndex(2)
             try:
@@ -550,13 +658,7 @@ class DetailViewer(QWidget):
         self.anim.start()
 
     def update_image(self):
-        if self.current_pixmap and not self.current_pixmap.isNull():
-            scaled_pixmap = self.current_pixmap.scaled(
-                self.image_label.size(), 
-                Qt.AspectRatioMode.KeepAspectRatio, 
-                Qt.TransformationMode.SmoothTransformation
-            )
-            self.image_label.setPixmap(scaled_pixmap)
+        self.image_scroll.update_view()
 
     def update_pdf_page(self):
         if not self.current_pdf_doc:
