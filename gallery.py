@@ -30,7 +30,7 @@ TEXT_COLOR = "#ffffff"
 SCROLLBAR_BG = "#1e1e1e"
 SCROLLBAR_HANDLE = "#555555"
 
-IMAGE_EXTS = ('.png', '.jpg', '.jpeg', '.webp', '.bmp', '.avif', '.svg')
+IMAGE_EXTS = ('.png', '.jpg', '.jpeg', '.webp', '.bmp', '.avif', '.svg', '.gif')
 VIDEO_EXTS = ('.mp4', '.avi', '.mkv', '.mov', '.webm')
 PDF_EXTS = ('.pdf',)
 ALL_EXTS = IMAGE_EXTS + VIDEO_EXTS + PDF_EXTS
@@ -576,13 +576,18 @@ class ZoomableImageScrollArea(QScrollArea):
 class GridImageItem(QWidget):
     clicked = pyqtSignal(object)
     double_clicked = pyqtSignal(object)
+    remove_requested = pyqtSignal(object)
     
     def __init__(self, filepath, parent=None):
         super().__init__(parent)
         self.filepath = filepath
         self.selected = False
+        self.is_hovered = False
         self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.setMinimumSize(220, 220)
+        self.setMinimumSize(40, 40)
+        
+        from PyQt5.QtWidgets import QSizePolicy
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         
         self.image_label = QLabel(self)
         self.image_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -591,8 +596,28 @@ class GridImageItem(QWidget):
         self.pixmap = QPixmap(filepath)
         
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(5, 5, 5, 5)
+        layout.setContentsMargins(10, 10, 10, 10)
         layout.addWidget(self.image_label)
+        
+        # Floating Remove Button
+        self.remove_btn = QPushButton("✕", self)
+        self.remove_btn.setFixedSize(24, 24)
+        self.remove_btn.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(239, 68, 68, 0.9);
+                color: white;
+                border: none;
+                border-radius: 12px;
+                font-size: 11px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: rgba(220, 38, 38, 1);
+            }
+        """)
+        self.remove_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.remove_btn.clicked.connect(self.on_remove_clicked)
+        self.remove_btn.hide()
         
         self.update_image()
         
@@ -600,16 +625,41 @@ class GridImageItem(QWidget):
         self.selected = selected
         self.update()
         
+    def on_remove_clicked(self):
+        self.remove_requested.emit(self)
+        
     def update_image(self):
         if not self.pixmap.isNull():
-            w = max(10, self.width() - 10)
-            h = max(10, self.height() - 10)
+            p = self.parent()
+            while p and not isinstance(p, DetailViewer):
+                p = p.parent()
+            is_single = p and hasattr(p, 'grid_items') and len(p.grid_items) == 1
+            
+            margin = 0 if is_single else 10
+            self.layout().setContentsMargins(margin, margin, margin, margin)
+            
+            w = max(10, self.width() - margin * 2)
+            h = max(10, self.height() - margin * 2)
             scaled = self.pixmap.scaled(w, h, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
             self.image_label.setPixmap(scaled)
             
     def resizeEvent(self, event):
         super().resizeEvent(event)
         self.update_image()
+        self.remove_btn.move(max(0, self.width() - self.remove_btn.width() - 8), 8)
+        
+    def enterEvent(self, event):
+        self.is_hovered = True
+        self.remove_btn.show()
+        self.remove_btn.raise_()
+        self.update()
+        super().enterEvent(event)
+        
+    def leaveEvent(self, event):
+        self.is_hovered = False
+        self.remove_btn.hide()
+        self.update()
+        super().leaveEvent(event)
         
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
@@ -621,17 +671,60 @@ class GridImageItem(QWidget):
             self.double_clicked.emit(self)
         super().mouseDoubleClickEvent(event)
         
+    def trigger_fade_in(self):
+        self.opacity_effect = QGraphicsOpacityEffect(self)
+        self.setGraphicsEffect(self.opacity_effect)
+        self.fade_anim = QPropertyAnimation(self.opacity_effect, b"opacity")
+        self.fade_anim.setDuration(400)
+        self.fade_anim.setStartValue(0.0)
+        self.fade_anim.setEndValue(1.0)
+        self.fade_anim.setEasingCurve(QEasingCurve.Type.OutQuad)
+        self.fade_anim.start()
+        
     def paintEvent(self, event):
+        p = self.parent()
+        while p and not isinstance(p, DetailViewer):
+            p = p.parent()
+        if p and hasattr(p, 'grid_items') and len(p.grid_items) == 1:
+            return
+            
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         if self.selected:
             painter.setPen(QPen(QColor("#38bdf8"), 3))
             painter.setBrush(QBrush(QColor(56, 189, 248, 20)))
+        elif self.is_hovered:
+            painter.setPen(QPen(QColor("#38bdf8"), 1))
+            painter.setBrush(QBrush(QColor("#262626")))
         else:
             painter.setPen(QPen(QColor("#333333"), 1))
             painter.setBrush(QBrush(QColor("#1a1a1a")))
         painter.drawRoundedRect(self.rect().adjusted(2, 2, -2, -2), 8, 8)
         painter.end()
+
+
+class DragHighlightOverlay(QWidget):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground)
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self.hide()
+        
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.fillRect(self.rect(), QColor(18, 18, 18, 200))
+        
+        pen = QPen(QColor("#38bdf8"), 2, Qt.PenStyle.DashLine)
+        painter.setPen(pen)
+        painter.drawRoundedRect(self.rect().adjusted(15, 15, -15, -15), 10, 10)
+        
+        painter.setPen(QColor("#38bdf8"))
+        font = painter.font()
+        font.setPointSize(18)
+        font.setBold(True)
+        painter.setFont(font)
+        painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, "📥  Drop Images to Add to Grid")
 
 
 class DetailViewer(QWidget):
@@ -971,6 +1064,23 @@ class DetailViewer(QWidget):
         self.fit_button.clicked.connect(self.fit_to_screen)
         self.fit_button.hide()
 
+        # Image Count Badge
+        self.badge_label = QLabel(self)
+        self.badge_label.setStyleSheet("""
+            QLabel {
+                background-color: rgba(56, 189, 248, 0.95);
+                color: #0f172a;
+                border-radius: 4px;
+                padding: 4px 10px;
+                font-size: 13px;
+                font-weight: bold;
+            }
+        """)
+        self.badge_label.hide()
+
+        # Drag Highlight Overlay
+        self.drag_overlay = DragHighlightOverlay(self)
+
         self.current_filepath = None
         self.current_pixmap = None
         self.current_pdf_doc = None
@@ -985,12 +1095,24 @@ class DetailViewer(QWidget):
 
     def dragEnterEvent(self, event):
         if event.mimeData().hasUrls():
-            event.acceptProposedAction()
+            has_image = False
+            for url in event.mimeData().urls():
+                if url.toLocalFile().lower().endswith(IMAGE_EXTS):
+                    has_image = True
+                    break
+            if has_image:
+                self.set_drag_highlight(True)
+                event.acceptProposedAction()
             
+    def dragLeaveEvent(self, event):
+        self.set_drag_highlight(False)
+        event.acceptProposedAction()
+        
     def dragMoveEvent(self, event):
         event.acceptProposedAction()
         
     def dropEvent(self, event):
+        self.set_drag_highlight(False)
         if event.mimeData().hasUrls():
             image_paths = []
             for url in event.mimeData().urls():
@@ -999,8 +1121,18 @@ class DetailViewer(QWidget):
                     image_paths.append(path)
             if image_paths:
                 print(f"Debug: Number of dropped images: {len(image_paths)}")
-                self.load_multiple_media_grid(image_paths)
+                is_grid_active = (self.stacked_widget.currentIndex() == 4)
+                self.load_multiple_media_grid(image_paths, append=is_grid_active)
                 event.acceptProposedAction()
+
+    def set_drag_highlight(self, active):
+        if hasattr(self, 'drag_overlay'):
+            if active:
+                self.drag_overlay.setGeometry(self.rect())
+                self.drag_overlay.show()
+                self.drag_overlay.raise_()
+            else:
+                self.drag_overlay.hide()
 
     def fit_to_screen(self):
         if self.stacked_widget.currentIndex() == 0:
@@ -1066,7 +1198,7 @@ class DetailViewer(QWidget):
         self.fit_button.show()
         self.fit_button.raise_()
 
-    def load_multiple_media_grid(self, image_paths):
+    def load_multiple_media_grid(self, image_paths, append=False):
         self.anim.stop()
         self.media_player.stop()
         if self.current_pdf_doc:
@@ -1076,16 +1208,21 @@ class DetailViewer(QWidget):
         self.current_filepath = None
         self.current_pixmap = None
         
-        self.clear_grid_items()
-        
-        self.current_media_list = image_paths
-        self.grid_items = []
-        
+        if not append:
+            self.clear_grid_items()
+            self.current_media_list = []
+            self.grid_items = []
+        elif not hasattr(self, 'current_media_list'):
+            self.current_media_list = []
+            
         for path in image_paths:
+            self.current_media_list.append(path)
             item = GridImageItem(path, self)
             item.clicked.connect(self.on_grid_item_clicked)
             item.double_clicked.connect(self.on_grid_item_double_clicked)
+            item.remove_requested.connect(self.on_remove_item_requested)
             self.grid_items.append(item)
+            item.trigger_fade_in()
             
         self.rebuild_multi_image_grid(force=True)
         
@@ -1093,6 +1230,7 @@ class DetailViewer(QWidget):
         self.close_button.show()
         self.close_button.raise_()
         self.fit_button.hide()
+        self.update_image_count_badge()
         
         self.anim.setStartValue(0.0)
         self.anim.setEndValue(1.0)
@@ -1103,7 +1241,35 @@ class DetailViewer(QWidget):
             item.set_selected(item == clicked_item)
 
     def on_grid_item_double_clicked(self, clicked_item):
+        self.badge_label.hide()
         self.load_focused_image(clicked_item.filepath)
+
+    def on_remove_item_requested(self, item):
+        path = item.filepath
+        if hasattr(self, 'current_media_list') and path in self.current_media_list:
+            self.current_media_list.remove(path)
+        
+        if item in self.grid_items:
+            self.grid_items.remove(item)
+            
+        self.multi_image_grid.removeWidget(item)
+        item.setParent(None)
+        item.deleteLater()
+        
+        if not self.grid_items:
+            self.clear_media()
+        else:
+            self.rebuild_multi_image_grid(force=True)
+            self.update_image_count_badge()
+
+    def update_image_count_badge(self):
+        if hasattr(self, 'grid_items') and self.grid_items:
+            count = len(self.grid_items)
+            self.badge_label.setText(f"📁 {count} Image{'s' if count != 1 else ''}")
+            self.badge_label.show()
+            self.badge_label.raise_()
+        else:
+            self.badge_label.hide()
 
     def clear_grid_items(self):
         if hasattr(self, 'grid_items'):
@@ -1117,19 +1283,20 @@ class DetailViewer(QWidget):
         if not hasattr(self, 'grid_items') or not self.grid_items:
             return
             
-        width = self.multi_image_scroll.viewport().width()
-        if width <= 100:
-            width = self.width()
-        if width <= 100:
-            width = 800
-            
-        cols = max(1, width // 220)
+        image_count = len(self.grid_items)
         
-        if not force and hasattr(self, 'current_grid_cols') and self.current_grid_cols == cols:
-            return
-            
+        # Calculate columns and rows dynamically
+        import math
+        cols = math.ceil(math.sqrt(image_count))
+        rows = math.ceil(image_count / cols)
         self.current_grid_cols = cols
         
+        # Clear previous layout stretches
+        for r in range(self.multi_image_grid.rowCount()):
+            self.multi_image_grid.setRowStretch(r, 0)
+        for c in range(self.multi_image_grid.columnCount()):
+            self.multi_image_grid.setColumnStretch(c, 0)
+            
         for item in self.grid_items:
             self.multi_image_grid.removeWidget(item)
             
@@ -1137,6 +1304,14 @@ class DetailViewer(QWidget):
             row = idx // cols
             col = idx % cols
             self.multi_image_grid.addWidget(item, row, col)
+            
+        for r in range(rows):
+            self.multi_image_grid.setRowStretch(r, 1)
+        for c in range(cols):
+            self.multi_image_grid.setColumnStretch(c, 1)
+            
+        for item in self.grid_items:
+            item.update_image()
 
     def update_image(self):
         self.image_scroll.update_view()
@@ -1148,6 +1323,7 @@ class DetailViewer(QWidget):
             self.fit_button.hide()
             self.close_button.show()
             self.close_button.raise_()
+            self.update_image_count_badge()
             return
             
         self.anim.stop()
@@ -1165,6 +1341,7 @@ class DetailViewer(QWidget):
         self.stacked_widget.setCurrentIndex(3)
         self.close_button.hide()
         self.fit_button.hide()
+        self.badge_label.hide()
         self.media_closed.emit()
 
     def update_pdf_page(self):
@@ -1292,6 +1469,13 @@ class DetailViewer(QWidget):
         
         self.fit_button.move(margin + 45, margin)
         self.fit_button.raise_()
+
+        if hasattr(self, 'badge_label'):
+            self.badge_label.move(margin + 120, margin + 4)
+            self.badge_label.raise_()
+
+        if hasattr(self, 'drag_overlay'):
+            self.drag_overlay.setGeometry(self.rect())
 
 
 class MainWindow(QMainWindow):

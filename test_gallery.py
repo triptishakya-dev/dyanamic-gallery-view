@@ -173,5 +173,28 @@ class TestGalleryApp(unittest.TestCase):
         viewer.clear_media()
         self.assertEqual(viewer.stacked_widget.currentIndex(), 3)
 
+    def test_dynamic_layout_and_features(self):
+        viewer = self.window.detail_viewer
+        
+        # 1. Load single image
+        viewer.load_multiple_media_grid([self.test_img_path])
+        self.assertEqual(len(viewer.grid_items), 1)
+        self.assertEqual(viewer.current_grid_cols, 1)
+        self.assertEqual(viewer.badge_label.text(), "📁 1 Image")
+        self.assertFalse(viewer.badge_label.isHidden())
+        
+        # 2. Append another image (simulate drag & drop append)
+        viewer.load_multiple_media_grid([self.test_img_path], append=True)
+        self.assertEqual(len(viewer.grid_items), 2)
+        self.assertEqual(viewer.current_grid_cols, 2)
+        self.assertEqual(viewer.badge_label.text(), "📁 2 Images")
+        
+        # 3. Test remove item request
+        item_to_remove = viewer.grid_items[0]
+        viewer.on_remove_item_requested(item_to_remove)
+        self.assertEqual(len(viewer.grid_items), 1)
+        self.assertEqual(viewer.current_grid_cols, 1)
+        self.assertEqual(viewer.badge_label.text(), "📁 1 Image")
+
 if __name__ == '__main__':
     unittest.main()
