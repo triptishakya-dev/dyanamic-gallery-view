@@ -1008,10 +1008,8 @@ class DetailViewer(QWidget):
         self.multi_image_scroll.setWidget(self.multi_image_container)
         self.stacked_widget.addWidget(self.multi_image_scroll)
 
-        self.opacity_effect = QGraphicsOpacityEffect(self.stacked_widget)
-        self.stacked_widget.setGraphicsEffect(None)
-        
-        self.anim = QPropertyAnimation(self.opacity_effect, b"opacity")
+        self.anim = QPropertyAnimation(self.stacked_widget)
+        self.anim.setPropertyName(b"opacity")
         self.anim.setDuration(300)
         self.anim.setStartValue(0.0)
         self.anim.setEndValue(1.0)
@@ -1303,7 +1301,9 @@ class DetailViewer(QWidget):
 
     def start_stacked_animation(self):
         self.anim.stop()
+        self.opacity_effect = QGraphicsOpacityEffect(self.stacked_widget)
         self.stacked_widget.setGraphicsEffect(self.opacity_effect)
+        self.anim.setTargetObject(self.opacity_effect)
         self.anim.setStartValue(0.0)
         self.anim.setEndValue(1.0)
         self.anim.start()
