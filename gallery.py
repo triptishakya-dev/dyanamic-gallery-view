@@ -484,6 +484,28 @@ class ZoomableImageScrollArea(QScrollArea):
             else:
                 self.setCursor(Qt.CursorShape.OpenHandCursor)
 
+    def zoom_by(self, factor):
+        """Zoom around the center when invoked by buttons or shortcuts."""
+        if not self.original_pixmap or self.original_pixmap.isNull():
+            return
+
+        if self.is_fit:
+            displayed = self.image_label.pixmap()
+            if displayed and self.original_pixmap.width() > 0:
+                self.zoom_factor = displayed.width() / self.original_pixmap.width()
+            else:
+                self.zoom_factor = 1.0
+            self.is_fit = False
+
+        self.zoom_factor = max(0.1, min(self.zoom_factor * factor, 10.0))
+        self.update_view()
+
+    def zoom_in(self):
+        self.zoom_by(1.25)
+
+    def zoom_out(self):
+        self.zoom_by(0.8)
+
     def enterEvent(self, event):
         self.update_cursor()
         super().enterEvent(event)
@@ -722,6 +744,7 @@ class DragHighlightOverlay(QWidget):
 class DetailViewer(QWidget):
     media_closed = pyqtSignal()
     image_clicked = pyqtSignal()
+    fullscreen_requested = pyqtSignal()
     
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -1055,6 +1078,20 @@ class DetailViewer(QWidget):
         self.fit_button.clicked.connect(self.fit_to_screen)
         self.fit_button.hide()
 
+        self.zoom_out_button = QPushButton("−", self)
+        self.zoom_out_button.setFixedSize(36, 36)
+        self.zoom_out_button.setToolTip("Zoom out")
+        self.zoom_out_button.setStyleSheet(self.fit_button.styleSheet())
+        self.zoom_out_button.clicked.connect(self.image_scroll.zoom_out)
+        self.zoom_out_button.hide()
+
+        self.zoom_in_button = QPushButton("+", self)
+        self.zoom_in_button.setFixedSize(36, 36)
+        self.zoom_in_button.setToolTip("Zoom in")
+        self.zoom_in_button.setStyleSheet(self.fit_button.styleSheet())
+        self.zoom_in_button.clicked.connect(self.image_scroll.zoom_in)
+        self.zoom_in_button.hide()
+
         # Image Count Badge
         self.badge_label = QLabel(self)
         self.badge_label.setStyleSheet("""
@@ -1135,6 +1172,15 @@ class DetailViewer(QWidget):
             self.image_scroll.zoom_factor = 1.0
             self.image_scroll.update_view()
 
+    def set_image_zoom_controls_visible(self, visible):
+        self.fit_button.setVisible(visible)
+        self.zoom_out_button.setVisible(visible)
+        self.zoom_in_button.setVisible(visible)
+        if visible:
+            self.fit_button.raise_()
+            self.zoom_out_button.raise_()
+            self.zoom_in_button.raise_()
+
     def load_media(self, filepath):
         self.anim.stop()
         self.media_player.stop()
@@ -1153,10 +1199,10 @@ class DetailViewer(QWidget):
             pixmap = QPixmap(filepath)
             self.current_pixmap = pixmap
             self.image_scroll.set_pixmap(pixmap)
-            self.fit_button.show()
+            self.set_image_zoom_controls_visible(True)
         elif lower_path.endswith(PDF_EXTS):
             self.stacked_widget.setCurrentIndex(2)
-            self.fit_button.hide()
+            self.set_image_zoom_controls_visible(False)
             try:
                 self.current_pdf_doc = fitz.open(filepath)
                 self.current_pdf_page = 0
@@ -1167,7 +1213,7 @@ class DetailViewer(QWidget):
                 self.pdf_label.setText(f"Failed to load PDF: {e}")
         elif lower_path.endswith(VIDEO_EXTS):
             self.stacked_widget.setCurrentIndex(1)
-            self.fit_button.hide()
+            self.set_image_zoom_controls_visible(False)
             self.play_button.setText("▶")
             self.time_label.setText("00:00 / 00:00")
             self.video_slider.setValue(0)
@@ -1188,8 +1234,7 @@ class DetailViewer(QWidget):
         self.image_scroll.set_pixmap(pixmap)
         self.close_button.show()
         self.close_button.raise_()
-        self.fit_button.show()
-        self.fit_button.raise_()
+        self.set_image_zoom_controls_visible(True)
 
     def load_multiple_media_grid(self, image_paths, append=False):
         self.anim.stop()
@@ -1221,7 +1266,7 @@ class DetailViewer(QWidget):
         self.stacked_widget.setCurrentIndex(4) # Multi-image grid page
         self.close_button.show()
         self.close_button.raise_()
-        self.fit_button.hide()
+        self.set_image_zoom_controls_visible(False)
         self.update_image_count_badge()
         
         self.start_stacked_animation()
@@ -1233,6 +1278,9 @@ class DetailViewer(QWidget):
     def on_grid_item_double_clicked(self, clicked_item):
         self.badge_label.hide()
         self.load_focused_image(clicked_item.filepath)
+        # A grid double-click means "open this image" rather than merely select
+        # it, so promote the focused viewer to the application's fullscreen mode.
+        self.fullscreen_requested.emit()
 
     def on_remove_item_requested(self, item):
         path = item.filepath
@@ -1335,7 +1383,7 @@ class DetailViewer(QWidget):
         # Return to multi-image grid if focused viewer is closed and we have a grid loaded
         if self.stacked_widget.currentIndex() == 0 and hasattr(self, 'grid_items') and self.grid_items:
             self.stacked_widget.setCurrentIndex(4)
-            self.fit_button.hide()
+            self.set_image_zoom_controls_visible(False)
             self.close_button.show()
             self.close_button.raise_()
             self.update_image_count_badge()
@@ -1356,7 +1404,7 @@ class DetailViewer(QWidget):
         
         self.stacked_widget.setCurrentIndex(3)
         self.close_button.hide()
-        self.fit_button.hide()
+        self.set_image_zoom_controls_visible(False)
         self.badge_label.hide()
         self.media_closed.emit()
 
@@ -1486,8 +1534,14 @@ class DetailViewer(QWidget):
         self.fit_button.move(margin + 45, margin)
         self.fit_button.raise_()
 
+        self.zoom_out_button.move(margin + 110, margin)
+        self.zoom_out_button.raise_()
+
+        self.zoom_in_button.move(margin + 151, margin)
+        self.zoom_in_button.raise_()
+
         if hasattr(self, 'badge_label'):
-            self.badge_label.move(margin + 120, margin + 4)
+            self.badge_label.move(margin + 200, margin + 4)
             self.badge_label.raise_()
 
         if hasattr(self, 'drag_overlay'):
@@ -1507,6 +1561,7 @@ class MainWindow(QMainWindow):
         self.detail_viewer = DetailViewer()
         self.detail_viewer.media_closed.connect(self.clear_selection)
         self.detail_viewer.image_clicked.connect(self.toggle_fullscreen)
+        self.detail_viewer.fullscreen_requested.connect(self.enter_fullscreen)
         self.splitter.addWidget(self.detail_viewer)
         
         self.sidebar_container = QWidget()
@@ -1681,6 +1736,10 @@ class MainWindow(QMainWindow):
         else:
             self.sidebar_container.show()
             self.showNormal()
+
+    def enter_fullscreen(self):
+        if not getattr(self, 'is_fullscreen', False):
+            self.toggle_fullscreen()
 
     def eventFilter(self, watched, event):
         if getattr(self, 'is_fullscreen', False) and event.type() == QEvent.MouseMove:
