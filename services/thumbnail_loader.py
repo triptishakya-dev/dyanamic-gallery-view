@@ -69,7 +69,7 @@ class ThumbnailLoader(QThread):
                 print(f"Error making PDF thumbnail: {e}")
         elif lower_name.endswith(VIDEO_EXTS):
             return self.create_video_placeholder()
-        return None
+        return self.create_document_placeholder()
 
     def create_rounded_thumbnail(self, pixmap):
         size = min(pixmap.width(), pixmap.height())
@@ -112,5 +112,33 @@ class ThumbnailLoader(QThread):
             QPoint(54, 40)
         ])
         painter.drawPolygon(poly)
+        painter.end()
+        return rounded
+
+    def create_document_placeholder(self):
+        rounded = QPixmap(80, 80)
+        rounded.fill(Qt.GlobalColor.transparent)
+        painter = QPainter(rounded)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+        path = QPainterPath()
+        path.addRoundedRect(0, 0, 80, 80, 8, 8)
+        painter.setClipPath(path)
+
+        grad = QLinearGradient(0, 0, 80, 80)
+        grad.setColorAt(0, QColor("#334155"))
+        grad.setColorAt(1, QColor("#1e293b"))
+        painter.fillRect(0, 0, 80, 80, QBrush(grad))
+
+        painter.setBrush(QBrush(QColor("#94a3b8")))
+        painter.setPen(Qt.PenStyle.NoPen)
+
+        # Draw a simple document icon
+        painter.drawRect(25, 20, 30, 40)
+        painter.setBrush(QBrush(QColor("#1e293b")))
+        painter.drawRect(30, 28, 15, 2)
+        painter.drawRect(30, 36, 20, 2)
+        painter.drawRect(30, 44, 20, 2)
+        
         painter.end()
         return rounded
