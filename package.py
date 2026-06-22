@@ -86,6 +86,7 @@ def main():
             
             if sys.platform == "darwin":
                 os.system(f"ditto {app_src} {dmg_root}/GalleryX.app")
+                os.system(f"xattr -cr {dmg_root}/GalleryX.app")
             else:
                 shutil.copytree(app_src, os.path.join(dmg_root, "GalleryX.app"), symlinks=True)
 
@@ -104,10 +105,7 @@ def main():
             if not os.path.exists(dmg_src):
                 raise FileNotFoundError("Could not find GalleryX.dmg in dist/")
 
-            # Create dmg folder inside pkg_dir
-            dmg_dir = os.path.join(pkg_dir, "dmg")
-            os.makedirs(dmg_dir, exist_ok=True)
-            shutil.copy2(dmg_src, os.path.join(dmg_dir, "GalleryX.dmg"))
+            shutil.copy2(dmg_src, os.path.join(pkg_dir, "GalleryX.dmg"))
 
             # Organize media folders inside the zip package
             organize_media(pkg_dir)
