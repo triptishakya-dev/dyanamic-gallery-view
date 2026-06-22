@@ -10,7 +10,7 @@ from PyQt5.QtGui import (
 )
 from PyQt5.QtCore import (
     Qt, pyqtSignal, QPropertyAnimation, QEasingCurve, QRect, QPoint, QUrl,
-    QEvent, QSize, QTimer, QMimeData
+    QEvent, QSize, QTimer, QMimeData, QFileSystemWatcher
 )
 
 from config.constants import BG_COLOR, SCROLLBAR_BG, SCROLLBAR_HANDLE
@@ -140,9 +140,12 @@ class MainWindow(QMainWindow):
             public_dir = os.path.join(base_dir, "public")
             folder = public_dir if os.path.exists(public_dir) else base_dir
 
-        self.worker = ImageWorker(folder)
-        self.worker.file_found.connect(self.add_image_card)
-        self.worker.start()
+        self.scan_folder = folder
+        self.watcher = QFileSystemWatcher()
+        self.watcher.directoryChanged.connect(self.on_directory_changed)
+        self.setup_watcher(self.scan_folder)
+        
+        self.start_scan()
 
         self.setMouseTracking(True)
         app = QApplication.instance()
@@ -331,8 +334,89 @@ class MainWindow(QMainWindow):
         super().resizeEvent(event)
         self.trigger_lazy_load()
 
+    def setup_watcher(self, folder):
+        existing_paths = self.watcher.directories()
+        if existing_paths:
+            self.watcher.removePaths(existing_paths)
+        
+        if os.path.exists(folder):
+            self.watcher.addPath(folder)
+            
+        subfolders = ["images", "videos", "pdf", "others"]
+        for sub in subfolders:
+            subpath = os.path.join(folder, sub)
+            if os.path.isdir(subpath):
+                self.watcher.addPath(subpath)
+
+    def on_directory_changed(self, path):
+        print(f"Directory changed: {path}")
+        self.setup_watcher(self.scan_folder)
+        self.start_scan()
+
+    def start_scan(self):
+        if hasattr(self, 'worker') and self.worker.isRunning():
+            self.worker.stop()
+            
+        self.scanned_filepaths = set()
+        
+        self.worker = ImageWorker(self.scan_folder)
+        self.worker.file_found.connect(self.on_file_found_during_scan)
+        self.worker.finished_loading.connect(self.on_scan_finished)
+        self.worker.start()
+
+    def on_file_found_during_scan(self, filepath, filename, date_str):
+        self.scanned_filepaths.add(filepath)
+        
+        exists = any(card.filepath == filepath for card in self.cards)
+        if not exists:
+            card = ImageCard(filepath, filename, date_str, self)
+            card.clicked.connect(self.on_card_clicked)
+            self.list_layout.addWidget(card)
+            self.cards.append(card)
+            
+            self.sort_cards()
+            
+            if len(self.cards) == 1:
+                self.select_card(0)
+                
+            QTimer.singleShot(50, self.trigger_lazy_load)
+
+    def on_scan_finished(self):
+        removed_any = False
+        selected_card = self.cards[self.current_index] if 0 <= self.current_index < len(self.cards) else None
+        
+        for card in list(self.cards):
+            if card.filepath not in self.scanned_filepaths:
+                self.list_layout.removeWidget(card)
+                card.deleteLater()
+                self.cards.remove(card)
+                removed_any = True
+                
+        if removed_any:
+            self.sort_cards()
+            if selected_card and selected_card in self.cards:
+                self.current_index = self.cards.index(selected_card)
+            else:
+                if self.cards:
+                    self.select_card(0)
+                else:
+                    self.current_index = -1
+                    self.detail_viewer.clear()
+        
+        QTimer.singleShot(50, self.trigger_lazy_load)
+
+    def sort_cards(self):
+        selected_card = self.cards[self.current_index] if 0 <= self.current_index < len(self.cards) else None
+        self.cards.sort(key=lambda c: os.path.basename(c.filepath).lower())
+        for i, card in enumerate(self.cards):
+            self.list_layout.insertWidget(i, card)
+        if selected_card and selected_card in self.cards:
+            self.current_index = self.cards.index(selected_card)
+        else:
+            self.current_index = -1
+
     def closeEvent(self, event):
-        if self.worker.isRunning():
+        if hasattr(self, 'worker') and self.worker.isRunning():
             self.worker.stop()
         self.thumb_loader.stop()
         self.detail_viewer.shutdown()
