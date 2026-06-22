@@ -1,5 +1,6 @@
 import os
 from datetime import datetime
+# pyrefly: ignore [missing-import]
 from PyQt5.QtCore import QThread, pyqtSignal
 from config.constants import ALL_EXTS
 
@@ -20,8 +21,8 @@ class ImageWorker(QThread):
     def run(self):
         files_to_scan = [] # list of (filepath, filename)
 
-        # Check for subfolders: images, videos, pdf
-        subfolders = ["images", "videos", "pdf"]
+        # Check for subfolders: images, videos, pdf, others
+        subfolders = ["images", "videos", "pdf", "others"]
         has_subfolders = False
         for sub in subfolders:
             subpath = os.path.join(self.folder_path, sub)

@@ -95,13 +95,31 @@ class MainWindow(QMainWindow):
         self.thumb_loader.start()
 
         if getattr(sys, 'frozen', False):
-            base_dir = os.path.dirname(os.path.abspath(sys.executable))
-            if "Contents/MacOS" in base_dir:
-                base_dir = os.path.abspath(os.path.join(base_dir, "..", "..", ".."))
+            exec_dir = os.path.dirname(os.path.abspath(sys.executable))
+            if "Contents/MacOS" in exec_dir:
+                base_dir = os.path.abspath(os.path.join(exec_dir, "..", "..", ".."))
+            else:
+                base_dir = exec_dir
+            
+            # If the base_dir itself doesn't contain media folders but the parent does (e.g. windows exe/ folder),
+            # use the parent folder.
+            parent_dir = os.path.abspath(os.path.join(base_dir, ".."))
+            has_media_subfolders = any(
+                os.path.isdir(os.path.join(base_dir, sub))
+                for sub in ["images", "videos", "pdf", "others"]
+            )
+            has_parent_media_subfolders = any(
+                os.path.isdir(os.path.join(parent_dir, sub))
+                for sub in ["images", "videos", "pdf", "others"]
+            )
+            if not has_media_subfolders and has_parent_media_subfolders:
+                folder = parent_dir
+            else:
+                folder = base_dir
         else:
             base_dir = os.path.dirname(os.path.abspath(sys.argv[0]))
-        public_dir = os.path.join(base_dir, "public")
-        folder = public_dir if os.path.exists(public_dir) else base_dir
+            public_dir = os.path.join(base_dir, "public")
+            folder = public_dir if os.path.exists(public_dir) else base_dir
 
         self.worker = ImageWorker(folder)
         self.worker.file_found.connect(self.add_image_card)

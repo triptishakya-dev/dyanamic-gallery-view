@@ -11,10 +11,12 @@ def organize_media(dest_dir, source_dir="public"):
     images_dir = os.path.join(dest_dir, "images")
     videos_dir = os.path.join(dest_dir, "videos")
     pdf_dir = os.path.join(dest_dir, "pdf")
+    others_dir = os.path.join(dest_dir, "others")
 
     os.makedirs(images_dir, exist_ok=True)
     os.makedirs(videos_dir, exist_ok=True)
     os.makedirs(pdf_dir, exist_ok=True)
+    os.makedirs(others_dir, exist_ok=True)
 
     if not os.path.exists(source_dir):
         print(f"Source folder '{source_dir}' does not exist.")
@@ -33,6 +35,9 @@ def organize_media(dest_dir, source_dir="public"):
             elif ext in PDF_EXTS:
                 shutil.copy2(src_path, os.path.join(pdf_dir, item))
                 print(f"Copied pdf {item} to {pdf_dir}")
+            else:
+                shutil.copy2(src_path, os.path.join(others_dir, item))
+                print(f"Copied other file {item} to {others_dir}")
 
 def main():
     parser = argparse.ArgumentParser()
@@ -54,7 +59,10 @@ def main():
             else:
                 raise FileNotFoundError("Could not find gallery.exe or GalleryX.exe in dist/")
 
-        shutil.copy2(exe_src, os.path.join(pkg_dir, os.path.basename(exe_src)))
+        # Create exe folder inside pkg_dir
+        exe_dir = os.path.join(pkg_dir, "exe")
+        os.makedirs(exe_dir, exist_ok=True)
+        shutil.copy2(exe_src, os.path.join(exe_dir, os.path.basename(exe_src)))
 
         # Organize media folders inside the package
         organize_media(pkg_dir)
@@ -96,7 +104,10 @@ def main():
             if not os.path.exists(dmg_src):
                 raise FileNotFoundError("Could not find GalleryX.dmg in dist/")
 
-            shutil.copy2(dmg_src, os.path.join(pkg_dir, "GalleryX.dmg"))
+            # Create dmg folder inside pkg_dir
+            dmg_dir = os.path.join(pkg_dir, "dmg")
+            os.makedirs(dmg_dir, exist_ok=True)
+            shutil.copy2(dmg_src, os.path.join(dmg_dir, "GalleryX.dmg"))
 
             # Organize media folders inside the zip package
             organize_media(pkg_dir)
