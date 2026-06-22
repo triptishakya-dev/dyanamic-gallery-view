@@ -45,12 +45,14 @@ jobs:
         python package.py --platform macos --action prepare-dmg
     - name: Create DMG
       run: |
-        hdiutil create \
-          -volname "GalleryX" \
-          -srcfolder dmg-root \
-          -ov \
-          -format UDZO \
-          dist/GalleryX.dmg
+        for i in {1..5}; do
+          hdiutil create \
+            -volname "GalleryX" \
+            -srcfolder dmg-root \
+            -ov \
+            -format UDZO \
+            dist/GalleryX.dmg && break || sleep 5;
+        done
     - name: Package macOS ZIP
       run: |
         python package.py --platform macos --action zip-dmg
